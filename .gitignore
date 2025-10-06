@@ -1,0 +1,29 @@
+# Node/JS
+node_modules/
+dist/
+build/
+out/
+.next/
+coverage/
+*.log
+
+# Env/secretos
+.env
+.env.*
+*.local
+
+# Sistemas
+.DS_Store
+Thumbs.db
+
+# Monorepo/PNPM caches
+.pnpm-store/
+.npm/
+.yarn/
+
+tsbuildinfo
+*.tsbuildinfo
+
+# IDE/Editor
+.vscode/
+.idea/
