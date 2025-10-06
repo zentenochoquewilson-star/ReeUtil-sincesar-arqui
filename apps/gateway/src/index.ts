@@ -1,4 +1,4 @@
-// apps/gateway/src/index.ts
+﻿// apps/gateway/src/index.ts
 import "dotenv/config";
 import express, { Request, Response, NextFunction } from "express";
 import cors from "cors";
@@ -50,6 +50,10 @@ const svc = {
   auth: process.env.AUTH_BASE ?? "http://localhost:3071",
 };
 
+const GATEWAY_BASE =
+  process.env.GATEWAY_BASE ??
+  `http://localhost:${process.env.PORT || 8080}`;
+
 type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
 /* ---------------- utils fetch ---------------- */
@@ -83,7 +87,7 @@ async function proxy(
       ...(extraHeaders || {}),
     };
 
-    // Adjunta el sub del usuario autenticado si existe
+    // Adjunta el sub del usuario autenticado si existe (útil para quotes/notify)
     const sub = (req as any)?.user?.sub;
     if (typeof sub === "string" && sub) headers["x-user-sub"] = sub;
 
@@ -150,10 +154,6 @@ app.get("/api/_status", async (_req, res) => {
 /* ---------------- Auth ---------------- */
 app.get("/api/auth/me", requireAuth, (req, res) => res.json(req.user));
 
-/* ---- Local auth passthrough (login/register) ---- */
-app.post("/api/auth/local/login", (req, res) => proxy(req, res, `${svc.auth}/local/login`));
-app.post("/api/auth/local/register", (req, res) => proxy(req, res, `${svc.auth}/local/register`));
-
 /* ---------------- Admin (RBAC) ---------------- */
 app.get("/api/admin/health", requireAuth, requireRole(["admin", "staff"]), (_req, res) => {
   res.json({ ok: true });
@@ -182,6 +182,7 @@ app.put(
 );
 
 /* ---------------- Registry ---------------- */
+// Types
 app.get("/api/registry/types", (req, res) =>
   proxy(req, res, `${svc.registry}/types`, "GET")
 );
@@ -189,18 +190,22 @@ app.post("/api/registry/types", (req, res) =>
   proxy(req, res, `${svc.registry}/types`)
 );
 
+// Models (?type_id -> typeId)
 app.get("/api/registry/models", (req, res) => {
   const usp = new URLSearchParams();
   if (req.query.type_id) usp.set("typeId", String(req.query.type_id));
+  else if (req.query.typeId) usp.set("typeId", String(req.query.typeId));
   proxy(req, res, `${svc.registry}/models?${usp.toString()}`, "GET");
 });
 app.post("/api/registry/models", (req, res) =>
   proxy(req, res, `${svc.registry}/models`)
 );
 
+// Rules (lista)
 app.get("/api/registry/rules", (req, res) => {
   const usp = new URLSearchParams();
   if (req.query.type_id) usp.set("typeId", String(req.query.type_id));
+  else if (req.query.typeId) usp.set("typeId", String(req.query.typeId));
   if (req.query.kind) usp.set("kind", String(req.query.kind));
   proxy(req, res, `${svc.registry}/rules?${usp.toString()}`, "GET");
 });
@@ -208,7 +213,61 @@ app.post("/api/registry/rules", (req, res) =>
   proxy(req, res, `${svc.registry}/rules`)
 );
 
-/* ---------------- Admin Forms (registry-svc) ---------------- */
+/* ---------------- Rules active (aplanado para pricing) ---------------- */
+app.get("/api/rules/active", async (req, res) => {
+  try {
+    const usp = new URLSearchParams();
+    if (req.query.type_id) usp.set("typeId", String(req.query.type_id));
+    else if (req.query.typeId) usp.set("typeId", String(req.query.typeId));
+    if (req.query.kind) usp.set("kind", String(req.query.kind));
+
+    const url = `${svc.registry}/rules/active?${usp.toString()}`;
+    const r = await fetchWithTimeout(url, { timeoutMs: 8000 });
+    const ctype = r.headers.get("content-type") || "application/json";
+    if (!r.ok) {
+      const text = await r.text().catch(() => "");
+      return res.status(r.status).type(ctype).send(text);
+    }
+
+    const raw = await r.json();
+
+    // Registry podría devolver {item}, {items:[...]}, o el doc directo
+    const doc: any =
+      raw?.item ??
+      (Array.isArray(raw?.items) ? raw.items[0] : raw) ??
+      {};
+
+    const body = doc?.body ?? {};
+    const flattened: any = {
+      ...doc,
+      active: doc.active ?? body.active ?? false,
+      status: doc.status ?? body.status,
+      published: doc.published ?? body.published,
+      effectiveFrom: doc.effectiveFrom ?? body.effectiveFrom,
+      effectiveTo: doc.effectiveTo ?? body.effectiveTo,
+      match: doc.match ?? body.match ?? doc.criteria ?? body.criteria ?? {},
+      criteria: doc.criteria ?? body.criteria ?? {},
+      formula: doc.formula ?? body.formula ?? { basePrice: 0, minPrice: 0, adjustments: [] },
+    };
+
+    delete flattened.body; // menos ruido
+    return res.json(flattened);
+  } catch (err: any) {
+    console.error("[GW /api/rules/active] flatten error:", err);
+    return res.status(502).json({ ok: false, error: "Bad gateway", detail: String(err) });
+  }
+});
+
+/* ---------------- Forms (registry-svc) ---------------- */
+// Active form para usuarios  /api/forms/active?type_id=...
+app.get("/api/forms/active", (req, res) => {
+  const usp = new URLSearchParams();
+  if (req.query.type_id) usp.set("typeId", String(req.query.type_id));
+  else if (req.query.typeId) usp.set("typeId", String(req.query.typeId));
+  proxy(req, res, `${svc.registry}/forms/active?${usp.toString()}`, "GET");
+});
+
+// Admin forms
 app.get(
   "/api/admin/forms",
   requireAuth,
@@ -236,6 +295,50 @@ app.put(
       "PUT"
     )
 );
+/* ---------------- Forms (registry-svc) ---------------- */
+// Alias público (compat) para clientes que llaman /api/registry/forms/active
+app.get("/api/registry/forms/active", (req, res) => {
+  const usp = new URLSearchParams();
+  if (req.query.type_id) usp.set("typeId", String(req.query.type_id));
+  else if (req.query.typeId) usp.set("typeId", String(req.query.typeId));
+  proxy(req, res, `${svc.registry}/forms/active?${usp.toString()}`, "GET");
+});
+
+// Alias admin (compat) para clientes que llaman /api/registry/forms
+app.get(
+  "/api/registry/forms",
+  requireAuth,
+  requireRole(["admin", "staff"]),
+  (req, res) => {
+    const qp = req.url.includes("?") ? req.url.substring(req.url.indexOf("?")) : "";
+    proxy(req, res, `${svc.registry}/forms${qp}`, "GET");
+  }
+);
+
+app.post(
+  "/api/registry/forms",
+  requireAuth,
+  requireRole(["admin", "staff"]),
+  (req, res) => proxy(req, res, `${svc.registry}/forms`)
+);
+
+app.put(
+  "/api/registry/forms/:id/activate",
+  requireAuth,
+  requireRole(["admin", "staff"]),
+  (req, res) =>
+    proxy(
+      req,
+      res,
+      `${svc.registry}/forms/${encodeURIComponent(req.params.id)}/activate`,
+      "PUT"
+    )
+);
+
+// (Las rutas que ya tenías siguen válidas)
+// - GET /api/forms/active             (público)
+// - GET/POST/PUT /api/admin/forms     (admin)
+
 
 /* ---------------- Admin Inspections (inspection-svc) ---------------- */
 app.get(
@@ -260,9 +363,88 @@ app.put(
     )
 );
 
+app.post("/api/inspection/reports/confirm-shipment", requireAuth, (req, res) =>
+  proxy(req, res, `${svc.inspection}/reports/confirm-shipment`)
+);
+
+/* ---------------- NUEVO: Admin Shipments (inspection-svc) ----------- */
+app.get(
+  "/api/admin/shipments",
+  requireAuth,
+  requireRole(["admin", "staff"]),
+  (req, res) => {
+    const qp = req.url.includes("?") ? req.url.substring(req.url.indexOf("?")) : "";
+    proxy(req, res, `${svc.inspection}/shipments${qp}`, "GET");
+  }
+);
+/** NUEVO: listar confirmaciones (requires admin/staff) */
+app.get(
+  "/api/admin/shipments/confirmations",
+  requireAuth,
+  requireRole(["admin", "staff"]),
+  (req, res) => {
+    const qp = req.url.includes("?") ? req.url.substring(req.url.indexOf("?")) : "";
+    proxy(req, res, `${svc.notify}/shipments/confirmations${qp}`, "GET");
+  }
+);
+
+/** NUEVO: marcar confirmación como procesada (requires admin/staff) */
+app.patch(
+  "/api/admin/shipments/confirmations/:id/process",
+  requireAuth,
+  requireRole(["admin", "staff"]),
+  (req, res) =>
+    proxy(
+      req,
+      res,
+      `${svc.notify}/shipments/confirmations/${encodeURIComponent(req.params.id)}/process`,
+      "PATCH"
+    )
+);
 /* ---------------- Quote ---------------- */
-// Calcular precio con reglas de registry
-app.post("/api/quote/price", (req, res) => proxy(req, res, `${svc.quote}/price`));
+// Calcular precio con reglas de registry (inyecta registryRuleUrl y answers)
+app.post("/api/quote/price", (req, res) => {
+  try {
+    const original = (req.body ?? {}) as Record<string, any>;
+
+    // answers: si ya vienen, usarlos; si no, empaquetar el body completo como answers
+    const answers =
+      original.answers && typeof original.answers === "object"
+        ? original.answers
+        : { ...original };
+
+    // typeId puede venir en answers o en nivel raíz
+    const typeId =
+      original.typeId ||
+      original.type_id ||
+      answers.typeId ||
+      answers.type_id;
+
+    // registryRuleUrl: si no viene, lo generamos con base en typeId
+    let registryRuleUrl = String(original.registryRuleUrl || "");
+    if (!registryRuleUrl) {
+      if (!typeId) {
+        return res
+          .status(400)
+          .json({ ok: false, error: "typeId required when registryRuleUrl is missing" });
+      }
+      const usp = new URLSearchParams();
+      usp.set("typeId", String(typeId));
+      usp.set("kind", "pricing");
+      registryRuleUrl = `${GATEWAY_BASE}/api/rules/active?${usp.toString()}`;
+    }
+
+    // No contaminar answers con registryRuleUrl
+    delete (answers as any).registryRuleUrl;
+
+    // Sobrescribimos body para el microservicio quote
+    (req as any).body = { answers, registryRuleUrl };
+    return proxy(req, res, `${svc.quote}/price`);
+  } catch (err) {
+    console.error("[GW] /api/quote/price transform error", err);
+    return res.status(500).json({ ok: false, error: "transform error" });
+  }
+});
 
 // Crear cotización (requiere auth para inyectar x-user-sub)
 app.post("/api/quotes", requireAuth, (req, res) =>
@@ -274,11 +456,6 @@ app.get("/api/quotes/:id", requireAuth, (req, res) =>
   proxy(req, res, `${svc.quote}/quotes/${encodeURIComponent(req.params.id)}`, "GET")
 );
 
-// Actualizar estado de cotización
-app.put("/api/quotes/:id/status", requireAuth, (req, res) =>
-  proxy(req, res, `${svc.quote}/quotes/${encodeURIComponent(req.params.id)}/status`, "PUT")
-);
-
 // Listar "Mis cotizaciones" (mine=1) para el usuario autenticado
 app.get("/api/quotes", requireAuth, (req, res) => {
   const usp = new URLSearchParams();
@@ -286,6 +463,28 @@ app.get("/api/quotes", requireAuth, (req, res) => {
   usp.set("mine", "1");
   proxy(req, res, `${svc.quote}/quotes?${usp.toString()}`, "GET");
 });
+
+// (Opcional dev) Reasignar demo-quotes al usuario autenticado
+app.post(
+  "/api/admin/reassign-demo-quotes",
+  requireAuth,
+  requireRole(["admin", "staff"]),
+  (req, res) => proxy(req, res, `${svc.quote}/admin/reassign-demo-quotes`)
+);
+
+// (Opcional) Exponer sync de estado de quote para panel admin
+app.put(
+  "/api/admin/quotes/:id/status",
+  requireAuth,
+  requireRole(["admin", "staff"]),
+  (req, res) =>
+    proxy(
+      req,
+      res,
+      `${svc.quote}/admin/quotes/${encodeURIComponent(req.params.id)}/status`,
+      "PUT"
+    )
+);
 
 /* ---------------- Notify (bandeja del usuario) ---------------- */
 app.get("/api/notify/inbox", requireAuth, (req, res) => {
@@ -305,15 +504,39 @@ app.patch("/api/notify/inbox/:id/read", requireAuth, (req, res) => {
   );
 });
 
+// (Opcional) Email helper
+app.post("/api/notify/send-email", (req, res) =>
+  proxy(req, res, `${svc.notify}/send-email`)
+);
+// Notify: ack explícito
+app.patch("/api/notify/inbox/:id/ack", requireAuth, (req, res) => {
+  const sub = (req as any).user?.sub || "";
+  proxy(
+    req,
+    res,
+    `${svc.notify}/inbox/${encodeURIComponent(req.params.id)}/ack`,
+    "PATCH",
+    { "x-user-sub": sub }
+  );
+});
+
+/** NUEVO: ACK de una notificación (aceptar/entender; con datos de envío si aplica) */
+app.post("/api/notify/inbox/:id/ack", requireAuth, (req, res) => {
+  const sub = (req as any).user?.sub || "";
+  proxy(
+    req,
+    res,
+    `${svc.notify}/inbox/${encodeURIComponent(req.params.id)}/ack`,
+    "POST",
+    { "x-user-sub": sub }
+  );
+});
 /* ---------------- Otros ---------------- */
 app.post("/api/shipment/kits", (req, res) => proxy(req, res, `${svc.shipment}/kits`));
 app.post("/api/inspection/reports", (req, res) =>
   proxy(req, res, `${svc.inspection}/reports`)
 );
 app.post("/api/payout/payouts", (req, res) => proxy(req, res, `${svc.payout}/payouts`));
-app.post("/api/notify/send-email", (req, res) =>
-  proxy(req, res, `${svc.notify}/send-email`)
-);
 
 /* ---------------- 404 + errores ---------------- */
 app.use((req, res) =>

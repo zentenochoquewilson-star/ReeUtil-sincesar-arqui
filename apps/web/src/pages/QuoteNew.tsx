@@ -1,369 +1,332 @@
 // apps/web/src/pages/QuoteNew.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import { get, post } from "../lib/api";
-import { useLocation, useNavigate } from "react-router-dom";
-import { useForm, type SubmitHandler, type Resolver } from "react-hook-form";
-import { z } from "zod";
-import { zodResolver } from "@hookform/resolvers/zod";
-import toast from "react-hot-toast";
+import DynamicForm, { DFSchema } from "../components/DynamicForm";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
-  Calculator,
-  Save,
   AlertCircle,
+  Calculator,
   CheckCircle2,
-  Smartphone,
-  Laptop,
-  Tablet,
-  Tv,
-  Watch,
-  Headphones,
-  Camera,
-  Printer,
-  Monitor,
-  Speaker,
-  Box,
   ChevronRight,
+  Save,
   Send,
 } from "lucide-react";
+import toast from "react-hot-toast";
 
-/* ------------------------------- Tipos base ------------------------------- */
-type DeviceType = { id: string; name: string };
+/** Debe ser ABSOLUTA para que quote-svc pueda resolverla (y reescribir si hace falta). */
+const API_BASE: string =
+  (import.meta as any)?.env?.VITE_API_BASE || "http://localhost:8080/api";
+
+type DeviceType = { id: string; name: string; code?: string };
 type DeviceModel = {
-  typeId: string;
-  brand: string;
-  model: string;
+  _id: string;
+  typeId?: string | null;
+  name: string;
+  extId: string;
+  brand?: string;
+  model?: string;
   year?: number | null;
-  extId?: string | null;
 };
 
-/* ------------------------------ Validaciones ------------------------------ */
-const allowedPantalla = ["intacta", "quebrada"] as const;
+type PriceResp = {
+  prelimPrice: number;
+  ruleVersion?: number;
+  ruleSnapshot?: any;
+};
 
-const formSchema = z.object({
-  typeId: z.string().min(1, { message: "Selecciona un tipo" }),
-  // modelExtId guarda un string JSON: {extId} o {brand,model,year}
-  modelExtId: z.string().min(1, { message: "Selecciona un modelo" }),
-  pantalla: z
-    .string()
-    .refine((v) => (allowedPantalla as readonly string[]).includes(v), {
-      message: "Selecciona el estado de pantalla",
-    }),
-  bateria_ok: z.boolean(),
-  almacenamiento_gb: z
-    .coerce.number()
-    .int({ message: "Ingresa un número entero" })
-    .min(16, { message: "Mínimo 16 GB" })
-    .max(1024, { message: "Máximo 1024 GB" }),
-});
-
-type FormValues = z.infer<typeof formSchema>;
-
-/* ----------------------------- Iconos por tipo ---------------------------- */
-function TypeIcon({ name }: { name: string }) {
-  const n = name.toLowerCase();
-  const cls = "h-8 w-8";
-  if (n.includes("tel") || n.includes("phone") || n.includes("móvil")) return <Smartphone className={cls} />;
-  if (n.includes("laptop") || n.includes("notebook") || n.includes("portátil")) return <Laptop className={cls} />;
-  if (n.includes("tablet") || n.includes("ipad")) return <Tablet className={cls} />;
-  if (n.includes("tv") || n.includes("tele")) return <Tv className={cls} />;
-  if (n.includes("reloj") || n.includes("watch")) return <Watch className={cls} />;
-  if (n.includes("aud") || n.includes("head") || n.includes("ear")) return <Headphones className={cls} />;
-  if (n.includes("cámara") || n.includes("camera")) return <Camera className={cls} />;
-  if (n.includes("impres") || n.includes("print")) return <Printer className={cls} />;
-  if (n.includes("monitor")) return <Monitor className={cls} />;
-  if (n.includes("parlante") || n.includes("speaker")) return <Speaker className={cls} />;
-  return <Box className={cls} />;
-}
-
-/* ------------------------------ Helpers modelo ---------------------------- */
-type ModelKeyByExt = { extId: string };
-type ModelKeyByAttrs = { brand: string; model: string; year: number | null };
-
-function makeOptionValue(m: DeviceModel): string {
-  if (m.extId) return JSON.stringify({ extId: m.extId } satisfies ModelKeyByExt);
-  return JSON.stringify({
-    brand: m.brand,
-    model: m.model,
-    year: m.year ?? null,
-  } satisfies ModelKeyByAttrs);
-}
-
-function parseModelKey(s: string | null | undefined): ModelKeyByExt | ModelKeyByAttrs | null {
-  try {
-    if (!s) return null;
-    const obj = JSON.parse(s);
-    if (obj && typeof obj === "object") return obj;
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-function matchModel(models: DeviceModel[], key: ModelKeyByExt | ModelKeyByAttrs | null): DeviceModel | null {
-  if (!key) return null;
-  if ("extId" in key) {
-    return models.find((m) => (m.extId ?? null) === key.extId) || null;
-  }
-  return (
-    models.find(
-      (m) =>
-        m.brand === key.brand &&
-        m.model === key.model &&
-        ((m.year ?? null) === (key.year ?? null))
-    ) || null
-  );
-}
-
-/* -------------------------------- Componente -------------------------------- */
 export default function QuoteNew() {
-  const navigate = useNavigate();
-  const { search } = useLocation();
-  const urlTypeId = new URLSearchParams(search).get("typeId") || "";
+  const nav = useNavigate();
+  const [searchParams] = useSearchParams();
   const modelsRef = useRef<HTMLDivElement | null>(null);
 
+  /* Paso 1 */
   const [types, setTypes] = useState<DeviceType[]>([]);
-  const [models, setModels] = useState<DeviceModel[]>([]);
-  const [loadingTypes, setLoadingTypes] = useState(true);
-  const [loadingModels, setLoadingModels] = useState(false);
-  const [err, setErr] = useState("");
+  const [typeId, setTypeId] = useState<string>("");
 
+  /* Paso 2 */
+  const [models, setModels] = useState<DeviceModel[]>([]);
+  const [modelExt, setModelExt] = useState<string>("");
+
+  /* Paso 3 - form dinámico */
+  const [schema, setSchema] = useState<DFSchema | null>(null);
+  const [answers, setAnswers] = useState<Record<string, any>>({});
+
+  /* Precio + meta */
+  const [calcing, setCalcing] = useState(false);
+  const [price, setPrice] = useState<number | null>(null);
+  const [ruleMeta, setRuleMeta] = useState<{ version?: number; snapshot?: any } | null>(null);
+
+  /* Guardado + revisión */
+  const [saving, setSaving] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [submittingReview, setSubmittingReview] = useState(false);
+  const [sending, setSending] = useState(false);
   const [savedQuoteId, setSavedQuoteId] = useState<string | null>(null);
 
-  const apiBase = import.meta.env.VITE_API_BASE as string;
+  const [err, setErr] = useState("");
 
-  // Resolver tipado
-  const resolver = zodResolver(formSchema) as unknown as Resolver<FormValues>;
+  const canCalc = useMemo(() => !!typeId, [typeId]);
+  const canSave = useMemo(() => !!typeId && !!modelExt, [typeId, modelExt]);
 
-  const form = useForm<FormValues>({
-    resolver,
-    defaultValues: {
-      typeId: urlTypeId || "",
-      modelExtId: "",
-      pantalla: "intacta",
-      bateria_ok: true,
-      almacenamiento_gb: 128,
-    },
-  });
+  /* Lee ?typeId=... si viene desde Home */
+  useEffect(() => {
+    const tid = searchParams.get("typeId");
+    if (tid) setTypeId(tid);
+  }, [searchParams]);
 
-  const {
-    register,
-    handleSubmit,
-    watch,
-    setValue,
-    setError,
-    formState: { errors, isSubmitting },
-  } = form;
-
-  const typeId = watch("typeId");
-  const modelKeyStr = watch("modelExtId");
-
-  // Resultado de cálculo
-  const [prelim, setPrelim] = useState<{
-    prelimPrice: number | null;
-    ruleVersion: number | null;
-    ruleSnapshot: any;
-  }>({ prelimPrice: null, ruleVersion: null, ruleSnapshot: {} });
-
-  // Cargar tipos
+  /* Cargar tipos */
   useEffect(() => {
     (async () => {
       try {
-        setLoadingTypes(true);
         const t = await get<DeviceType[]>("/registry/types");
-        setTypes(t);
-        setErr("");
-        if (!urlTypeId && t.length) setValue("typeId", t[0].id);
+        setTypes(Array.isArray(t) ? t : []);
       } catch (e: any) {
-        setErr(e.message || String(e));
-      } finally {
-        setLoadingTypes(false);
+        setErr(e?.message || "Error cargando tipos");
       }
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Cargar modelos cuando cambia el tipo
+  /* Al elegir tipo → cargar modelos + form activo */
   useEffect(() => {
-    (async () => {
-      if (!typeId) return;
-      try {
-        setLoadingModels(true);
-        const m = await get<DeviceModel[]>(`/registry/models?type_id=${encodeURIComponent(typeId)}`);
-        setModels(m);
+    if (!typeId) {
+      setModels([]);
+      setModelExt("");
+      setSchema(null);
+      setAnswers({});
+      setPrice(null);
+      setRuleMeta(null);
+      return;
+    }
 
-        // Autoselección si el actual no es válido
-        const parsed = parseModelKey(modelKeyStr);
-        const stillValid = matchModel(m, parsed);
-        if (!stillValid) {
-          if (m.length > 0) {
-            setValue("modelExtId", makeOptionValue(m[0]), { shouldDirty: true });
-          } else {
-            setValue("modelExtId", "", { shouldDirty: true });
-          }
-        }
+    (async () => {
+      setErr("");
+      setPrice(null);
+      setRuleMeta(null);
+
+      // Modelos
+      try {
+        // Usa typeId (el gateway lo traduce para registry)
+        const ms = await get<DeviceModel[]>(`/registry/models?typeId=${encodeURIComponent(typeId)}`);
+        const list = Array.isArray(ms) ? ms : [];
+        setModels(list);
+        setModelExt(list.length ? (list[0].extId || "") : "");
       } catch (e: any) {
-        toast.error(e.message || "No se pudieron cargar modelos");
-      } finally {
-        setLoadingModels(false);
+        setModels([]);
+        setModelExt("");
+        setErr(e?.message || "Error cargando modelos");
       }
+
+      // Form activo (endpoint correcto del gateway)
+      try {
+        const form = await get<any>(`/forms/active?typeId=${encodeURIComponent(typeId)}`);
+        const fields = form?.fields || form?.body?.fields || [];
+        const title = form?.title || form?.name || "Diagnóstico";
+        const description = form?.description || "";
+
+        if (Array.isArray(fields) && fields.length > 0) {
+          const mapped: DFSchema = {
+            title,
+            description,
+            fields: fields.map((f: any) => {
+              const rawType = f.type ?? f.kind ?? "text";
+              const normalizedType =
+                rawType === "radio" ? "radio" :
+                rawType === "select" ? "select" :
+                rawType === "number" ? "number" :
+                rawType === "textarea" ? "textarea" :
+                rawType === "checkbox" ? "checkbox" :
+                rawType === "switch" ? "checkbox" :      // renderiza switch como checkbox
+                rawType === "boolean" ? "checkbox" :     // idem boolean
+                "text";
+
+              return {
+                name: f.name || f.key, // soporta key/name
+                label: f.label || f.title || f.name || f.key,
+                type: normalizedType,
+                required: !!(f.required ?? f.isRequired),
+                placeholder: f.placeholder,
+                help: f.help || f.hint,
+                min: typeof f.min === "number" ? f.min : undefined,
+                max: typeof f.max === "number" ? f.max : undefined,
+                step: typeof f.step === "number" ? f.step : undefined,
+                options: Array.isArray(f.options)
+                  ? f.options.map((o: any) => ({
+                      label: o.label || String(o.value),
+                      value: o.value,
+                    }))
+                  : undefined,
+                visibleIf: f.visibleIf && typeof f.visibleIf === "object" ? f.visibleIf : undefined,
+              };
+            }),
+          };
+          setSchema(mapped);
+
+          // valores por defecto (default/value)
+          const initial: Record<string, any> = {};
+          for (const f of fields) {
+            const key = f.name || f.key;
+            if (!key) continue;
+            if (f.default !== undefined) initial[key] = f.default;
+            else if (f.value !== undefined) initial[key] = f.value;
+          }
+          setAnswers(initial);
+        } else {
+          // Fallback por si no hay formulario
+          setSchema({
+            title: "Diagnóstico",
+            description: "Cuéntanos el estado del dispositivo",
+            fields: [
+              {
+                name: "pantalla",
+                label: "Pantalla",
+                type: "radio",
+                required: true,
+                options: [
+                  { label: "Intacta", value: "intacta" },
+                  { label: "Quebrada", value: "quebrada" },
+                ],
+              },
+              { name: "bateria_ok", label: "Batería en buen estado", type: "checkbox" },
+              { name: "almacenamiento_gb", label: "Almacenamiento (GB)", type: "number", min: 0, step: 1 },
+            ],
+          });
+          setAnswers({});
+        }
+      } catch {
+        // Fallback si /forms/active 404/500
+        setSchema({
+          title: "Diagnóstico",
+          description: "Cuéntanos el estado del dispositivo",
+          fields: [
+            {
+              name: "pantalla",
+              label: "Pantalla",
+              type: "radio",
+              required: true,
+              options: [
+                { label: "Intacta", value: "intacta" },
+                { label: "Quebrada", value: "quebrada" },
+              ],
+            },
+            { name: "bateria_ok", label: "Batería en buen estado", type: "checkbox" },
+            { name: "almacenamiento_gb", label: "Almacenamiento (GB)", type: "number", min: 0, step: 1 },
+          ],
+        });
+        setAnswers({});
+      }
+
+      // scroll a modelos
+      setTimeout(() => modelsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [typeId]);
 
   const selectedType = useMemo(() => types.find((t) => t.id === typeId) || null, [types, typeId]);
+  const selectedModel = useMemo(() => models.find((m) => m.extId === modelExt) || null, [models, modelExt]);
 
-  const selectedModel = useMemo(() => {
-    const key = parseModelKey(modelKeyStr);
-    return matchModel(models, key);
-  }, [models, modelKeyStr]);
-
-  const onCalculate: SubmitHandler<FormValues> = async (values) => {
+  /* Calcular precio */
+  async function calcPrice() {
+    if (!typeId) return;
     try {
-      if (!values.modelExtId) {
-        setError("modelExtId", { message: "Selecciona un modelo" });
-        return;
-      }
-      const registryRuleUrl = `${apiBase}/registry/rules?type_id=${encodeURIComponent(values.typeId)}&kind=quote`;
-      const payload = {
-        answers: {
-          pantalla: values.pantalla,
-          bateria_ok: values.bateria_ok,
-          almacenamiento_gb: values.almacenamiento_gb,
-        },
-        registryRuleUrl,
-      };
+      setCalcing(true);
+      setErr("");
 
-      const r = await post<{
-        prelimPrice: number;
-        ruleVersion: number;
-        ruleSnapshot: any;
-      }>("/quote/price", payload);
+      // Usa el endpoint aplanado del gateway (kind=pricing)
+      const ruleUrl = `${API_BASE.replace(/\/$/, "")}/rules/active?type_id=${encodeURIComponent(
+        typeId
+      )}&kind=pricing`;
 
-      setPrelim(r);
-      setSavedQuoteId(null); // si recalcula, forzamos nuevo guardado antes de revisión
-      toast.success(`Precio preliminar: $${r.prelimPrice}`);
+      const resp = await post<PriceResp>("/quote/price", {
+        answers,
+        registryRuleUrl: ruleUrl,
+      });
+
+      setPrice(resp.prelimPrice ?? null);
+      setRuleMeta({ version: resp.ruleVersion, snapshot: resp.ruleSnapshot });
+      toast.success(`Precio preliminar: $${resp.prelimPrice}`);
     } catch (e: any) {
-      toast.error(e.message || "Error calculando precio");
+      setErr(e?.message || "No se pudo calcular el precio");
+      setPrice(null);
+      setRuleMeta(null);
+    } finally {
+      setCalcing(false);
     }
-  };
-
-  async function saveQuote(values: FormValues) {
-    const parsed = parseModelKey(values.modelExtId);
-    const model = parsed ? matchModel(models, parsed) : null;
-
-    const fallbackExt = model
-      ? [model.brand, model.model, model.year ?? ""].filter(Boolean).join("-")
-      : "modelo-desconocido";
-
-    const model_id_ext =
-      parsed && "extId" in parsed && parsed.extId ? parsed.extId : fallbackExt;
-
-    const body = {
-      user_id: "demo-user",
-      model_id_ext,
-      model_identity: model
-        ? { brand: model.brand, model: model.model, year: model.year ?? null }
-        : undefined,
-      answers: {
-        pantalla: values.pantalla,
-        bateria_ok: values.bateria_ok,
-        almacenamiento_gb: values.almacenamiento_gb,
-      },
-      prelim_price: prelim.prelimPrice,
-      rule_version: prelim.ruleVersion,
-      rule_snapshot: prelim.ruleSnapshot,
-    };
-    const r = await post<{ id: string }>("/quotes", body);
-    setSavedQuoteId(r.id);
-    return r.id;
   }
 
-  const onSave: SubmitHandler<FormValues> = async (values) => {
-    if (prelim.prelimPrice == null) {
-      toast.error("Primero calcula el precio");
-      return;
-    }
-    if (!values.modelExtId) {
-      setError("modelExtId", { message: "Selecciona un modelo" });
-      return;
-    }
+  /* Guardar cotización (requiere login) */
+  async function saveQuote(): Promise<string | null> {
+    if (!canSave) return null;
     try {
-      const id = await saveQuote(values);
-      toast.success("Cotización guardada");
-      console.log("Nueva cotización ID:", id);
-      // navigate(`/quotes/${id}`)
-    } catch (e: any) {
-      toast.error(e.message || "Error guardando cotización");
-    }
-  };
+      setSaving(true);
+      const body: any = {
+        model_id_ext: modelExt || null,
+        answers,
+      };
+      if (price != null) body.prelim_price = price;
+      if (ruleMeta?.version !== undefined) body.rule_version = ruleMeta.version;
+      if (ruleMeta?.snapshot) body.rule_snapshot = ruleMeta.snapshot;
 
-  /* ----------- Botón “Aceptar cotización” + Modal de confirmación ----------- */
+      const r = await post<{ ok: boolean; id: string }>("/quotes", body);
+      setSavedQuoteId(r.id);
+      toast.success("Cotización guardada");
+      return r.id;
+    } catch (e: any) {
+      if (String(e?.message || "").toLowerCase().includes("unauthorized")) {
+        toast.error("Inicia sesión para guardar tu cotización");
+      } else {
+        toast.error(e?.message || "No se pudo guardar la cotización");
+      }
+      return null;
+    } finally {
+      setSaving(false);
+    }
+  }
+
   function openConfirm() {
-    if (prelim.prelimPrice == null) {
-      toast.error("Primero calcula el precio");
+    if (!canSave) {
+      toast.error("Elige un modelo");
       return;
     }
-    if (!modelKeyStr) {
-      setError("modelExtId", { message: "Selecciona un modelo" });
+    if (price == null) {
+      toast.error("Calcula el precio primero");
       return;
     }
     setConfirmOpen(true);
   }
 
-  async function confirmSendReview() {
+  /* Enviar a revisión (asegura guardar primero) */
+  async function sendToReview() {
     try {
-      setSubmittingReview(true);
-      const values = form.getValues();
+      setSending(true);
 
-      let qid = savedQuoteId;
-      if (!qid) {
-        qid = await saveQuote(values);
+      let quoteId = savedQuoteId;
+      if (!quoteId) {
+        quoteId = await saveQuote();
       }
+      if (!quoteId) throw new Error("No se pudo crear la cotización");
 
       await post("/inspection/reports", {
-        quote_id: qid,
-        model_id_ext: (() => {
-          const parsed = parseModelKey(values.modelExtId);
-          if (parsed && "extId" in parsed && parsed.extId) return parsed.extId;
-          const m = parsed ? matchModel(models, parsed) : null;
-          return m ? [m.brand, m.model, m.year ?? ""].filter(Boolean).join("-") : "modelo-desconocido";
-        })(),
-        answers: {
-          pantalla: values.pantalla,
-          bateria_ok: values.bateria_ok,
-          almacenamiento_gb: values.almacenamiento_gb,
-        },
+        quote_id: quoteId,
+        model_id_ext: selectedModel?.extId || modelExt || "modelo-desconocido",
+        answers,
       });
 
+      toast.success("Enviado a revisión");
       setConfirmOpen(false);
-      toast.success("Solicitud enviada a revisión");
-      // navigate("/quotes");
+      nav("/quotes");
     } catch (e: any) {
-      toast.error(e.message || "No se pudo enviar a revisión");
+      toast.error(e?.message || "No se pudo enviar a revisión");
     } finally {
-      setSubmittingReview(false);
+      setSending(false);
     }
   }
 
-  /* ------------------------------ UI Helpers ------------------------------ */
-  function handlePickType(id: string) {
-    setValue("typeId", id, { shouldValidate: true, shouldDirty: true });
-    setPrelim({ prelimPrice: null, ruleVersion: null, ruleSnapshot: {} });
-    setSavedQuoteId(null);
-    setValue("modelExtId", ""); // será autoseleccionado al cargar modelos
-    setTimeout(() => modelsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
-  }
-
-  /* --------------------------------- Render -------------------------------- */
+  /* UI */
   return (
     <div className="min-h-screen bg-gray-50">
       <div className="mx-auto max-w-6xl px-4 py-8">
         <header className="mb-6">
           <h1 className="text-2xl font-semibold tracking-tight">Nueva cotización</h1>
           <p className="text-sm text-gray-600">
-            Selecciona el tipo de electrodoméstico, el modelo y completa el diagnóstico para calcular el precio.
+            Selecciona el tipo, el modelo y completa el diagnóstico para calcular el precio.
           </p>
         </header>
 
@@ -374,12 +337,12 @@ export default function QuoteNew() {
           </div>
         )}
 
-        {/* PASO 1: Selección por tarjetas */}
+        {/* Paso 1 */}
         <section className="mb-6">
           <div className="mb-3 flex items-end justify-between">
             <div>
               <div className="text-xs uppercase tracking-wide text-gray-500">Paso 1</div>
-              <h2 className="text-lg font-semibold">¿Qué tipo de electrodoméstico es?</h2>
+              <h2 className="text-lg font-semibold">Elige el tipo</h2>
             </div>
             {selectedType && (
               <div className="text-sm text-gray-600">
@@ -388,22 +351,8 @@ export default function QuoteNew() {
             )}
           </div>
 
-          {loadingTypes ? (
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3">
-              {Array.from({ length: 6 }).map((_, i) => (
-                <div key={i} className="card">
-                  <div className="h-8 w-8 rounded-lg bg-gray-200 animate-pulse" />
-                  <div className="mt-3 h-4 w-24 rounded bg-gray-200 animate-pulse" />
-                </div>
-              ))}
-            </div>
-          ) : types.length === 0 ? (
-            <div className="card">
-              <div className="font-medium mb-1">No hay tipos configurados</div>
-              <p className="text-sm text-gray-600">
-                Crea tipos en <code>registry.device_types</code> o usa la carga de demo desde la página de inicio.
-              </p>
-            </div>
+          {types.length === 0 ? (
+            <div className="card">No hay tipos configurados.</div>
           ) : (
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3">
               {types.map((t) => {
@@ -412,19 +361,13 @@ export default function QuoteNew() {
                   <button
                     key={t.id}
                     type="button"
-                    onClick={() => handlePickType(t.id)}
-                    className={`card card-hover flex items-center gap-3 text-left ${
+                    onClick={() => setTypeId(t.id)}
+                    className={`card card-hover flex items-center justify-between text-left ${
                       active ? "ring-2 ring-black" : ""
                     }`}
                     aria-pressed={active}
                   >
-                    <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-gray-100">
-                      <TypeIcon name={t.name} />
-                    </div>
-                    <div className="flex-1">
-                      <div className="font-medium">{t.name}</div>
-                      <div className="text-xs text-gray-500 truncate">ID: {t.id}</div>
-                    </div>
+                    <div className="font-medium">{t.name}</div>
                     <ChevronRight className="h-4 w-4 text-gray-400" />
                   </button>
                 );
@@ -434,9 +377,9 @@ export default function QuoteNew() {
         </section>
 
         <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
-          {/* Columna izquierda: formulario */}
-          <form onSubmit={handleSubmit(onCalculate)} className="md:col-span-2 rounded-xl border bg-white p-4">
-            {/* Encabezado Paso 2 */}
+          {/* Columna izquierda */}
+          <div className="md:col-span-2 rounded-xl border bg-white p-4">
+            {/* Paso 2 */}
             <div className="mb-2" ref={modelsRef}>
               <div className="text-xs uppercase tracking-wide text-gray-500">Paso 2</div>
               <div className="flex items-center justify-between">
@@ -445,151 +388,110 @@ export default function QuoteNew() {
               </div>
             </div>
 
-            {/* Modelo */}
             <div className="mb-4">
-              <select
-                {...register("modelExtId")}
-                className="w-full rounded-lg border bg-white px-3 py-2 text-sm"
-                disabled={!typeId || loadingModels}
-                value={modelKeyStr}
-                onChange={(e) => setValue("modelExtId", e.target.value, { shouldValidate: true })}
-              >
-                <option value="">
-                  {!typeId ? "Elige un tipo primero" : loadingModels ? "Cargando…" : "Selecciona…"}
-                </option>
-                {models.map((m) => {
-                  const value = makeOptionValue(m);
-                  return (
-                    <option key={value} value={value}>
-                      {m.brand} {m.model}
-                      {m.year ? ` (${m.year})` : ""}
-                    </option>
-                  );
-                })}
-              </select>
-              {errors.modelExtId && <p className="mt-1 text-xs text-red-600">{errors.modelExtId.message}</p>}
-              {!loadingModels && typeId && models.length === 0 && (
-                <p className="mt-2 text-xs text-gray-600">
-                  No hay modelos para este tipo. Agrega en <code>registry.device_models</code>.
-                </p>
+              {!typeId ? (
+                <select className="w-full rounded-lg border bg-white px-3 py-2 text-sm" disabled>
+                  <option>Elige un tipo primero</option>
+                </select>
+              ) : (
+                <select
+                  className="w-full rounded-lg border bg-white px-3 py-2 text-sm"
+                  value={modelExt}
+                  onChange={(e) => setModelExt(e.target.value)}
+                >
+                  {models.length === 0 ? (
+                    <option value="">No hay modelos para este tipo</option>
+                  ) : (
+                    <>
+                      {models.map((m) => (
+                        <option key={m._id} value={m.extId}>
+                          {m.name}
+                        </option>
+                      ))}
+                    </>
+                  )}
+                </select>
               )}
             </div>
 
-            {/* Paso 3: Diagnóstico */}
+            {/* Paso 3 */}
             <div className="mb-2">
               <div className="text-xs uppercase tracking-wide text-gray-500">Paso 3</div>
-              <label className="block text-sm font-medium">Diagnóstico</label>
+              <label className="block text-sm font-medium">{schema?.title || "Diagnóstico"}</label>
             </div>
 
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              {/* Pantalla */}
-              <div>
-                <label className="block text-sm font-medium mb-1">Pantalla</label>
-                <div className="flex gap-2">
-                  <label className="inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm">
-                    <input type="radio" value="intacta" {...register("pantalla")} />
-                    Intacta
-                  </label>
-                  <label className="inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm">
-                    <input type="radio" value="quebrada" {...register("pantalla")} />
-                    Quebrada
-                  </label>
-                </div>
-                {errors.pantalla && <p className="mt-1 text-xs text-red-600">{errors.pantalla.message}</p>}
-              </div>
-
-              {/* Batería */}
-              <div>
-                <label className="block text-sm font-medium mb-1">Batería</label>
-                <label className="inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm">
-                  <input type="checkbox" {...register("bateria_ok")} />
-                  Batería en buen estado
-                </label>
-              </div>
-
-              {/* Almacenamiento */}
-              <div>
-                <label className="block text-sm font-medium mb-1">Almacenamiento (GB)</label>
-                <input
-                  type="number"
-                  step="1"
-                  {...register("almacenamiento_gb")}
-                  className="w-full rounded-lg border bg-white px-3 py-2 text-sm"
-                  min={16}
-                  max={1024}
-                />
-                {errors.almacenamiento_gb && (
-                  <p className="mt-1 text-xs text-red-600">{errors.almacenamiento_gb.message}</p>
-                )}
-              </div>
-            </div>
+            <DynamicForm
+              schema={schema}
+              value={answers}
+              onChange={(patch) => setAnswers((prev) => ({ ...prev, ...patch }))}
+            />
 
             {/* Acciones */}
             <div className="mt-6 flex flex-wrap gap-2">
-              <button type="submit" disabled={isSubmitting} className="btn-primary disabled:opacity-60">
+              <button
+                className="btn-primary disabled:opacity-60"
+                onClick={calcPrice}
+                disabled={!canCalc || calcing}
+              >
                 <Calculator className="h-4 w-4" />
-                {isSubmitting ? "Calculando…" : "Calcular precio"}
+                {calcing ? "Calculando…" : "Calcular precio"}
               </button>
 
-              <button type="button" onClick={handleSubmit(onSave)} className="btn-secondary">
+              <button className="btn-secondary" onClick={saveQuote} disabled={!canSave || saving}>
                 <Save className="h-4 w-4" />
-                Guardar cotización
+                {saving ? "Guardando…" : "Guardar cotización"}
               </button>
 
-              <button type="button" onClick={() => navigate(-1)} className="btn-secondary">
+              <button className="btn-secondary" onClick={() => nav(-1)}>
                 Volver
               </button>
             </div>
-          </form>
+          </div>
 
-          {/* Columna derecha: resumen */}
+          {/* Resumen derecha */}
           <aside className="rounded-xl border bg-white p-4">
             <h3 className="font-medium mb-3">Resumen</h3>
 
             <div className="space-y-3 text-sm">
               <div>
                 <div className="text-gray-500">Tipo</div>
-                <div className="font-medium">{selectedType ? `${selectedType.name}` : "—"}</div>
+                <div className="font-medium">{selectedType ? selectedType.name : "—"}</div>
               </div>
+
               <div>
                 <div className="text-gray-500">Modelo</div>
-                <div className="font-medium">
-                  {selectedModel
-                    ? `${selectedModel.brand} ${selectedModel.model}${selectedModel.year ? ` (${selectedModel.year})` : ""}`
-                    : "—"}
-                </div>
-                {selectedModel?.extId && <div className="text-xs text-gray-500">extId: {selectedModel.extId}</div>}
+                <div className="font-medium">{selectedModel ? selectedModel.name : "—"}</div>
+                {selectedModel?.extId && (
+                  <div className="text-xs text-gray-500">extId: {selectedModel.extId}</div>
+                )}
               </div>
 
               <hr />
 
               <div className="flex items-center justify-between">
                 <span className="text-gray-500">Precio preliminar</span>
-                <span className="text-lg font-semibold">
-                  {prelim.prelimPrice != null ? `$${prelim.prelimPrice}` : "—"}
-                </span>
+                <span className="text-lg font-semibold">{price != null ? `$${price}` : "—"}</span>
               </div>
               <div className="text-xs text-gray-500">
-                {prelim.ruleVersion ? (
+                {ruleMeta?.version ? (
                   <span className="inline-flex items-center gap-1 text-green-700">
                     <CheckCircle2 className="h-3.5 w-3.5" />
-                    Regla v{prelim.ruleVersion} aplicada
+                    Regla v{ruleMeta.version} aplicada
                   </span>
                 ) : (
                   "Sin cálculo aún"
                 )}
               </div>
 
-              {/* Aceptar + modal */}
               <div className="pt-2">
                 <button
                   type="button"
-                  onClick={openConfirm}
-                  disabled={prelim.prelimPrice == null || !selectedModel}
                   className="btn-primary w-full disabled:opacity-60"
+                  onClick={openConfirm}
+                  disabled={!canSave || price == null}
                 >
                   <Send className="h-4 w-4" />
-                  Aceptar cotización
+                  Aceptar y enviar a revisión
                 </button>
               </div>
             </div>
@@ -597,35 +499,37 @@ export default function QuoteNew() {
         </div>
       </div>
 
-      {/* Modal de confirmación */}
+      {/* Modal confirmación */}
       {confirmOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" role="dialog" aria-modal="true">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
+          role="dialog"
+          aria-modal="true"
+        >
           <div className="w-full max-w-md rounded-xl border bg-white p-5 shadow-lg">
             <h4 className="text-lg font-semibold mb-2">Confirmar envío a revisión</h4>
             <p className="text-sm text-gray-600">
-              ¿Usted está de acuerdo en enviar el estado de su dispositivo a revisión? Nuestro equipo verificará los
-              datos y se comunicará con usted para continuar el proceso.
+              ¿Deseas enviar tu cotización a revisión? Nuestro equipo verificará los datos y te contactará.
             </p>
 
             <div className="mt-4 rounded-lg bg-gray-50 p-3 text-sm">
               <div className="flex items-center justify-between">
                 <span className="text-gray-500">Precio preliminar</span>
-                <span className="font-semibold">{prelim.prelimPrice != null ? `$${prelim.prelimPrice}` : "—"}</span>
+                <span className="font-semibold">{price != null ? `$${price}` : "—"}</span>
               </div>
               {selectedType && selectedModel && (
                 <div className="mt-1 text-xs text-gray-500">
-                  {selectedType.name} · {selectedModel.brand} {selectedModel.model}
-                  {selectedModel.year ? ` (${selectedModel.year})` : ""}
+                  {selectedType.name} · {selectedModel.name}
                 </div>
               )}
             </div>
 
             <div className="mt-5 flex flex-wrap gap-2 justify-end">
-              <button className="btn-secondary" onClick={() => setConfirmOpen(false)} disabled={submittingReview}>
+              <button className="btn-secondary" onClick={() => setConfirmOpen(false)} disabled={sending}>
                 Cancelar
               </button>
-              <button className="btn-primary disabled:opacity-60" onClick={confirmSendReview} disabled={submittingReview}>
-                {submittingReview ? "Enviando…" : "Enviar a revisión"}
+              <button className="btn-primary disabled:opacity-60" onClick={sendToReview} disabled={sending}>
+                {sending ? "Enviando…" : "Enviar a revisión"}
               </button>
             </div>
           </div>

@@ -385,26 +385,26 @@ export default function AdminFormNew() {
 
     try {
       // 1) Guardar formulario
-      const bodyForm: any = {
+      const formRes = await post<{ ok: boolean; id: string }>("/registry/forms", {
         typeId,
-        name: formName.trim(),
-        isActive: active,
+        title: formName.trim(),           // registry usa title/name
+        description: "",                  // opcional
+        isActive: active,                 // si está activo, desactiva anteriores
         fields: fields.map(f => ({
-          ...f,
+          name: f.key,                    // ← importante: clave estable
+          label: f.label,
+          type: f.kind,                   // "text" | "number" | "boolean" | "select" | "radio" | "checkbox"
+          required: !!f.required,
           options: f.options?.map(o => ({
-            value: slugify(o.value || o.label),
-            label: o.label
-          }))
+            label: o.label,
+            value: o.value,               // ya viene slugified arriba
+          })),
         })),
-      };
-      if (version.trim() !== "") bodyForm.version = Number(version);
-
-      const formRes = await post<{ ok: boolean; id: string; version: number }>("/admin/forms", bodyForm);
-
+      });
       // 2) Guardar regla de precio simple
       const ruleBody = {
         typeId,
-        kind: "quote",
+        kind: "pricing",
         isActive: true,
         // si escribiste versión manual, reutilízala; si no, el backend autoasignará
         ...(version.trim() !== "" ? { version: Number(version) } : {}),
@@ -415,7 +415,7 @@ export default function AdminFormNew() {
       };
       await post("/registry/rules", ruleBody);
 
-      toast.success(`Formulario guardado (v${formRes.version}) y regla de precio actualizada`);
+      toast.success("Formulario guardado y regla de precio actualizada");
       navigate("/admin/forms");
     } catch (e: any) {
       toast.error(e.message || "No se pudo guardar");

@@ -204,53 +204,26 @@ export default function AdminQuotes() {
                 </div>
               </div>
 
-              {/* Detalles amigables */}
-              <div className="mt-3 space-y-3">
+              {/* Detalles sencillos */}
+              <div className="mt-3 grid gap-2 text-xs text-gray-600 sm:grid-cols-2">
                 {r.answers && Object.keys(r.answers).length > 0 && (
                   <div>
-                    <div className="font-medium text-gray-800 mb-2">
-                      Diagnóstico del dispositivo
+                    <div className="font-medium text-gray-800 mb-1">
+                      Respuestas del usuario
                     </div>
-                    <div className="grid gap-2 sm:grid-cols-2">
-                      {r.answers.pantalla && (
-                        <div className="flex items-center justify-between p-2 bg-gray-50 rounded">
-                          <span className="text-sm font-medium">Pantalla</span>
-                          <span className={`text-sm ${r.answers.pantalla === "intacta" ? "text-green-600" : "text-red-600"}`}>
-                            {r.answers.pantalla === "intacta" ? "✅ Intacta" : "❌ Quebrada"}
-                          </span>
-                        </div>
-                      )}
-                      {typeof r.answers.bateria_ok === "boolean" && (
-                        <div className="flex items-center justify-between p-2 bg-gray-50 rounded">
-                          <span className="text-sm font-medium">Batería</span>
-                          <span className={`text-sm ${r.answers.bateria_ok ? "text-green-600" : "text-red-600"}`}>
-                            {r.answers.bateria_ok ? "✅ OK" : "❌ Problemas"}
-                          </span>
-                        </div>
-                      )}
-                      {r.answers.almacenamiento_gb && (
-                        <div className="flex items-center justify-between p-2 bg-gray-50 rounded">
-                          <span className="text-sm font-medium">Almacenamiento</span>
-                          <span className="text-sm font-medium">{r.answers.almacenamiento_gb}GB</span>
-                        </div>
-                      )}
-                    </div>
+                    <pre className="rounded bg-gray-50 p-2 overflow-auto">
+                      {JSON.stringify(r.answers, null, 2)}
+                    </pre>
                   </div>
                 )}
                 {r.findings && Object.keys(r.findings).length > 0 && (
                   <div>
-                    <div className="font-medium text-gray-800 mb-2">
+                    <div className="font-medium text-gray-800 mb-1">
                       Hallazgos del inspector
                     </div>
-                    <div className="p-3 bg-blue-50 rounded-lg">
-                      <div className="text-sm text-blue-800">
-                        {Object.entries(r.findings).map(([key, value]) => (
-                          <div key={key} className="mb-1">
-                            <span className="font-medium capitalize">{key.replace(/_/g, ' ')}:</span> {String(value)}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
+                    <pre className="rounded bg-gray-50 p-2 overflow-auto">
+                      {JSON.stringify(r.findings, null, 2)}
+                    </pre>
                   </div>
                 )}
               </div>

@@ -1,9 +1,75 @@
-// apps/web/src/pages/admin/AdminDashboard.tsx
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { get } from "../../lib/api";
-import { ShieldCheck, Users, Settings, Activity, ArrowRight, CheckCircle, XCircle } from "lucide-react";
+import {
+  Users,
+  FileText,
+  Tag,
+  PackageCheck,
+  ActivitySquare,
+  ExternalLink,
+  AlertTriangle,
+  ShieldCheck,
+} from "lucide-react";
 
-type StatusMap = Record<string, { ok: boolean; url?: string }>;
+type StatusItem = {
+  ok: boolean;
+  url?: string;
+  service?: string;
+  time?: string;
+  error?: string;
+};
+type StatusMap = Record<string, StatusItem>;
+
+function Pill({ ok }: { ok: boolean }) {
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs ${
+        ok ? "bg-emerald-100 text-emerald-800 border-emerald-200"
+           : "bg-rose-100 text-rose-800 border-rose-200"
+      }`}
+    >
+      {ok ? (
+        <>
+          <ShieldCheck className="h-3.5 w-3.5" />
+          OK
+        </>
+      ) : (
+        <>
+          <AlertTriangle className="h-3.5 w-3.5" />
+          DOWN
+        </>
+      )}
+    </span>
+  );
+}
+
+function QuickCard({
+  to,
+  icon,
+  title,
+  desc,
+}: {
+  to: string;
+  icon: React.ReactNode;
+  title: string;
+  desc: string;
+}) {
+  return (
+    <Link
+      to={to}
+      className="rounded-xl border bg-white p-4 hover:shadow transition"
+    >
+      <div className="flex items-center gap-3">
+        <div className="rounded-lg border bg-gray-50 p-2">{icon}</div>
+        <div>
+          <div className="font-medium">{title}</div>
+          <div className="text-sm text-gray-600">{desc}</div>
+        </div>
+      </div>
+    </Link>
+  );
+}
 
 export default function AdminDashboard() {
   const [status, setStatus] = useState<StatusMap | null>(null);
@@ -14,148 +80,120 @@ export default function AdminDashboard() {
       try {
         const s = await get<StatusMap>("/_status");
         setStatus(s);
+        setErr("");
       } catch (e: any) {
         setErr(e.message || String(e));
       }
     })();
   }, []);
 
-  const serviceCount = status ? Object.keys(status).length : 0;
-  const healthyCount = status ? Object.values(status).filter(s => s.ok).length : 0;
-
   return (
     <div className="space-y-6">
-      {/* Hero Section */}
-      <section className="relative overflow-hidden bg-hero-gradient text-white rounded-xl">
-        <div className="absolute inset-0 bg-dots opacity-20 pointer-events-none" />
-        <div className="relative p-6">
-          <div className="flex items-start justify-between gap-6">
-            <div>
-              <div className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-xs text-white/90 ring-1 ring-white/20">
-                <ShieldCheck className="h-3 w-3" />
-                Panel de Administración
-              </div>
-              <h1 className="mt-4 text-2xl font-semibold tracking-tight">Dashboard</h1>
-              <p className="mt-2 text-sm/6 text-slate-300">
-                Monitorea el estado de todos los servicios y gestiona la plataforma
-              </p>
-            </div>
+      <section>
+        <h1 className="text-2xl font-semibold">Resumen</h1>
+        <p className="text-sm text-gray-600">
+          Acceso rápido a las secciones de administración y estado de servicios.
+        </p>
+      </section>
 
-            {/* KPIs */}
-            <div className="grid grid-cols-2 gap-3">
-              <div className="kpi">
-                <div className="text-sm/5 text-slate-200">Servicios</div>
-                <div className="text-2xl font-semibold tracking-tight">{serviceCount}</div>
-              </div>
-              <div className="kpi">
-                <div className="text-sm/5 text-slate-200">Activos</div>
-                <div className="text-2xl font-semibold tracking-tight">{healthyCount}</div>
-              </div>
-            </div>
-          </div>
+      {/* Acciones rápidas */}
+      <section>
+        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-gray-500">
+          Acciones rápidas
+        </h2>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <QuickCard
+            to="/admin/users"
+            icon={<Users className="h-5 w-5" />}
+            title="Administrar usuarios"
+            desc="Roles, estado y permisos"
+          />
+          <QuickCard
+            to="/admin/forms"
+            icon={<FileText className="h-5 w-5" />}
+            title="Formularios"
+            desc="Crear, editar y activar"
+          />
+          <QuickCard
+            to="/admin/quotes"
+            icon={<Tag className="h-5 w-5" />}
+            title="Cotizaciones"
+            desc="Revisar y cambiar estados"
+          />
+          {/* NUEVO: Validación de envíos */}
+          <QuickCard
+            to="/admin/shipments"
+            icon={<PackageCheck className="h-5 w-5" />}
+            title="Validación de envíos"
+            desc="Confirmaciones y direcciones de envío"
+          />
+          {/* Salud de servicios (enlace puede cambiar si tienes página propia) */}
+          <QuickCard
+            to="/admin"
+            icon={<ActivitySquare className="h-5 w-5" />}
+            title="Salud de servicios"
+            desc="Estado de microservicios"
+          />
         </div>
       </section>
 
-      {/* Content Grid */}
-      <div className="grid gap-6 md:grid-cols-2">
-        {/* Service Health */}
-        <div className="card">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-purple-100">
-              <Activity className="h-5 w-5 text-purple-600" />
-            </div>
-            <h2 className="text-lg font-semibold text-gray-900">Salud de servicios</h2>
+      {/* Salud de servicios */}
+      <section>
+        <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-gray-500">
+          Salud de servicios
+        </h2>
+
+        {err && (
+          <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">
+            {err}
           </div>
-          
-          {err && (
-            <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 flex items-center gap-2">
-              <XCircle className="h-4 w-4" />
-              {err}
-            </div>
-          )}
-          
-          {!status && !err && (
-            <div className="text-center py-8">
-              <Activity className="h-8 w-8 mx-auto text-gray-400 animate-pulse" />
-              <p className="mt-2 text-sm text-gray-600">Cargando estado de servicios...</p>
-            </div>
-          )}
-          
-          {status && (
-            <div className="space-y-3">
-              {Object.entries(status).map(([serviceName, serviceStatus]) => (
-                <div key={serviceName} className="flex items-center justify-between p-3 rounded-lg border bg-gray-50">
-                  <div className="flex items-center gap-3">
-                    <div className={`h-2 w-2 rounded-full ${serviceStatus.ok ? 'bg-green-500' : 'bg-red-500'}`} />
-                    <span className="text-sm font-medium capitalize">{serviceName}</span>
+        )}
+
+        {!status && !err && (
+          <div className="text-sm text-gray-600">Cargando…</div>
+        )}
+
+        {status && (
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {Object.entries(status).map(([name, info]) => (
+              <div
+                key={name}
+                className="rounded-xl border bg-white p-4"
+              >
+                <div className="mb-1 flex items-center justify-between">
+                  <div className="font-medium">{name}</div>
+                  <Pill ok={!!info.ok} />
+                </div>
+                <div className="text-xs text-gray-600">
+                  {info.time ? `Último ping: ${new Date(info.time).toLocaleString()}` : "—"}
+                </div>
+                <div className="mt-2 flex items-center justify-between">
+                  <div className="text-xs text-gray-500 truncate">
+                    {info.url || "Sin URL"}
                   </div>
-                  <div className="flex items-center gap-2">
-                    {serviceStatus.ok ? (
-                      <CheckCircle className="h-4 w-4 text-green-600" />
-                    ) : (
-                      <XCircle className="h-4 w-4 text-red-600" />
-                    )}
-                    <span className={`text-xs font-medium ${serviceStatus.ok ? 'text-green-700' : 'text-red-700'}`}>
-                      {serviceStatus.ok ? 'OK' : 'DOWN'}
-                    </span>
+                  {info.url && (
+                    <a
+                      href={info.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      title="Abrir"
+                      className="inline-flex items-center gap-1 rounded border px-2 py-0.5 text-xs hover:bg-gray-50"
+                    >
+                      <ExternalLink className="h-3.5 w-3.5" />
+                      Abrir
+                    </a>
+                  )}
+                </div>
+                {info.error && (
+                  <div className="mt-2 rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-xs text-rose-800">
+                    {info.error}
                   </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Quick Actions */}
-        <div className="card">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-purple-100">
-              <Settings className="h-5 w-5 text-purple-600" />
-            </div>
-            <h2 className="text-lg font-semibold text-gray-900">Acciones rápidas</h2>
+                )}
+              </div>
+            ))}
           </div>
-          
-          <div className="space-y-3">
-            <a href="/admin/users" className="flex items-center justify-between p-4 rounded-lg border hover:bg-gray-50 transition-colors group">
-              <div className="flex items-center gap-3">
-                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-100">
-                  <Users className="h-4 w-4 text-blue-600" />
-                </div>
-                <div>
-                  <div className="font-medium text-gray-900">Usuarios</div>
-                  <div className="text-sm text-gray-500">Gestionar usuarios y roles</div>
-                </div>
-              </div>
-              <ArrowRight className="h-4 w-4 text-gray-400 group-hover:text-gray-600" />
-            </a>
-
-            <a href="/admin/forms" className="flex items-center justify-between p-4 rounded-lg border hover:bg-gray-50 transition-colors group">
-              <div className="flex items-center gap-3">
-                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-green-100">
-                  <Settings className="h-4 w-4 text-green-600" />
-                </div>
-                <div>
-                  <div className="font-medium text-gray-900">Formularios</div>
-                  <div className="text-sm text-gray-500">Configurar formularios de cotización</div>
-                </div>
-              </div>
-              <ArrowRight className="h-4 w-4 text-gray-400 group-hover:text-gray-600" />
-            </a>
-
-            <a href="/admin/quotes" className="flex items-center justify-between p-4 rounded-lg border hover:bg-gray-50 transition-colors group">
-              <div className="flex items-center gap-3">
-                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-purple-100">
-                  <Activity className="h-4 w-4 text-purple-600" />
-                </div>
-                <div>
-                  <div className="font-medium text-gray-900">Cotizaciones</div>
-                  <div className="text-sm text-gray-500">Revisar y gestionar cotizaciones</div>
-                </div>
-              </div>
-              <ArrowRight className="h-4 w-4 text-gray-400 group-hover:text-gray-600" />
-            </a>
-          </div>
-        </div>
-      </div>
+        )}
+      </section>
     </div>
   );
 }

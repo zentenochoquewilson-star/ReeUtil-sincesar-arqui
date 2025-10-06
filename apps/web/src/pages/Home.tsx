@@ -90,6 +90,9 @@ export default function Home() {
               <p className="mt-2 text-sm/6 text-slate-300">
                 Gateway: <code className="rounded bg-slate-700/60 px-1 py-0.5">{apiBase}</code>
               </p>
+              <div className="mt-4">
+                <StatusBar />
+              </div>
 
               <div className="mt-6 flex flex-wrap gap-3">
                 <button onClick={() => navigate("/quote/new")} className="btn-primary">

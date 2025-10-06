@@ -1,78 +1,160 @@
 ﻿// apps/web/src/lib/api.ts
-// Pequeño wrapper para fetch con base URL y encabezado Authorization.
+// Wrapper de fetch con base URL, Authorization por idToken y manejo robusto de errores.
 // Exporta: get, post, put, patch, del
 
-const API_BASE = (import.meta.env.VITE_API_BASE || "http://localhost:8080/api").replace(/\/$/, "");
+const API_BASE = String(
+  ((import.meta as any)?.env?.VITE_API_BASE || "http://localhost:8080/api") as string
+).replace(/\/$/, ""); // sin / al final
 
-type Json = Record<string, any> | Array<any> | null;
+type JsonLike = Record<string, any> | any[] | null;
+type ReqOpts = RequestInit & {
+  expectText?: boolean;   // fuerza respuesta como texto
+  timeoutMs?: number;     // timeout opcional
+};
 
+/** Une la base con el path, tolerando paths con o sin "/" inicial */
 function joinUrl(path: string) {
   return `${API_BASE}${path.startsWith("/") ? path : `/${path}`}`;
 }
 
-async function request<T = any>(path: string, init: RequestInit = {}): Promise<T> {
+/** Determina si el body es de tipo binario/form para NO fijar content-type JSON automáticamente */
+function isSpecialBody(b: any) {
+  return (
+    b instanceof FormData ||
+    b instanceof Blob ||
+    b instanceof ArrayBuffer ||
+    b instanceof URLSearchParams ||
+    // @ts-ignore - streams opcionales según runtime
+    (typeof ReadableStream !== "undefined" && b instanceof ReadableStream)
+  );
+}
+
+/** Safe text para errores */
+async function safeText(r: Response) {
+  try {
+    return await r.text();
+  } catch {
+    return "";
+  }
+}
+
+/** Intenta parsear JSON; si falla, devuelve null */
+function tryParseJSON<T = any>(s: string): T | null {
+  try {
+    return s ? (JSON.parse(s) as T) : (null as any);
+  } catch {
+    return null;
+  }
+}
+
+/** request principal */
+export async function request<T = any>(path: string, opts: ReqOpts = {}): Promise<T> {
   const token = localStorage.getItem("idToken") || "";
-  const headers = new Headers(init.headers || {});
+  const method = (opts.method || "GET").toUpperCase();
 
-  // Solo ponemos content-type JSON cuando hay body
-  const hasBody = init.body !== undefined && init.method && init.method !== "GET";
-  if (hasBody && !headers.has("content-type")) headers.set("content-type", "application/json");
-
-  // Authorization si hay token
+  // Headers (case-insensitive handled por fetch, pero normalizamos a string map)
+  const headers = new Headers(opts.headers || {});
+  // Authorization si hay token (permite override si el caller ya puso algo)
   if (token && !headers.has("authorization")) {
     headers.set("authorization", `Bearer ${token}`);
   }
 
-  const res = await fetch(joinUrl(path), { ...init, headers });
+  // Body y content-type inteligente:
+  let bodyToSend: BodyInit | undefined = opts.body as any;
+  const hasBody = bodyToSend !== undefined && method !== "GET" && method !== "HEAD";
+
+  if (hasBody) {
+    if (!isSpecialBody(bodyToSend)) {
+      // Si es objeto/array/cosa serializable y NO se definió content-type, lo hacemos JSON
+      const ctype = headers.get("content-type");
+      if (!ctype) headers.set("content-type", "application/json");
+      if (typeof bodyToSend !== "string") {
+        bodyToSend = JSON.stringify(bodyToSend ?? {});
+      }
+    } else {
+      // FormData / Blob / etc -> NO fijar content-type (lo hace el navegador)
+      // bodyToSend se deja tal cual
+    }
+  } else {
+    // Si no hay body o es GET/HEAD, aseguramos no enviar body accidentalmente
+    bodyToSend = undefined;
+  }
+
+  // Soporte de timeout opcional
+  const controller = new AbortController();
+  const timeoutMs = typeof opts.timeoutMs === "number" ? opts.timeoutMs : 15000;
+  const t = setTimeout(() => controller.abort(), timeoutMs);
+
+  let res: Response;
+  try {
+    res = await fetch(joinUrl(path), {
+      ...opts,
+      method,
+      headers,
+      body: bodyToSend,
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(t);
+  }
 
   // 204 No Content
   if (res.status === 204) return undefined as T;
 
-  const text = await res.text();
-  let data: Json = null;
-  try {
-    data = text ? JSON.parse(text) : null;
-  } catch {
-    // Si no es JSON, devolvemos el texto como está
-    (data as any) = text;
-  }
+  // leemos como texto una sola vez
+  const text = await safeText(res);
+  const ctype = res.headers.get("content-type") || "";
 
+  // si no OK -> construir error informativo
   if (!res.ok) {
+    const payload = tryParseJSON<JsonLike>(text);
     const msg =
-      (data && typeof data === "object" && ("error" in data || "message" in data) && ((data as any).error || (data as any).message)) ||
+      (payload &&
+        typeof payload === "object" &&
+        ("error" in payload || "message" in payload) &&
+        ((payload as any).error || (payload as any).message)) ||
+      text ||
       `${res.status} ${res.statusText}`;
-    const err = new Error(msg);
+    const err = new Error(String(msg));
     (err as any).status = res.status;
-    (err as any).payload = data;
+    (err as any).payload = payload ?? text;
     throw err;
   }
 
-  return data as T;
+  // OK -> devolver en el formato solicitado
+  if (opts.expectText) return (text as unknown) as T;
+
+  if (ctype.includes("application/json")) {
+    // content-type JSON
+    return (tryParseJSON<T>(text) as T);
+  }
+
+  // Si el servidor olvidó marcar content-type pero la respuesta es JSON válido, intentar parsear
+  const maybe = tryParseJSON<T>(text);
+  if (maybe !== null) return maybe;
+
+  // Por defecto -> texto
+  return (text as unknown) as T;
 }
 
-export const get = <T = any>(path: string, init?: RequestInit) =>
-  request<T>(path, { ...(init || {}), method: "GET" });
+/* Helpers HTTP sencillos */
+export function get<T = any>(path: string, init?: Omit<ReqOpts, "method">) {
+  return request<T>(path, { ...(init || {}), method: "GET" });
+}
 
-export const post = <T = any>(path: string, body?: any, init?: RequestInit) =>
-  request<T>(path, {
-    ...(init || {}),
-    method: "POST",
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
+export function post<T = any>(path: string, body?: any, init?: Omit<ReqOpts, "method" | "body">) {
+  // Pasamos el body “raw”. request decidirá si JSON.stringify o no según el tipo
+  return request<T>(path, { ...(init || {}), method: "POST", body });
+}
 
-export const put = <T = any>(path: string, body?: any, init?: RequestInit) =>
-  request<T>(path, {
-    ...(init || {}),
-    method: "PUT",
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
+export function put<T = any>(path: string, body?: any, init?: Omit<ReqOpts, "method" | "body">) {
+  return request<T>(path, { ...(init || {}), method: "PUT", body });
+}
 
-export const patch = <T = any>(path: string, body?: any, init?: RequestInit) =>
-  request<T>(path, {
-    ...(init || {}),
-    method: "PATCH",
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
+export function patch<T = any>(path: string, body?: any, init?: Omit<ReqOpts, "method" | "body">) {
+  return request<T>(path, { ...(init || {}), method: "PATCH", body });
+}
 
-export const del = <T = any>(path: string, init?: RequestInit) =>
-  request<T>(path, { ...(init || {}), method: "DELETE" });
+export function del<T = any>(path: string, init?: Omit<ReqOpts, "method">) {
+  return request<T>(path, { ...(init || {}), method: "DELETE" });
+}
