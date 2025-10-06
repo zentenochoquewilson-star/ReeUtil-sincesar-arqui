@@ -1,0 +1,60 @@
+@import "tailwindcss";
+
+@layer components {
+  /* Botones */
+  .btn {
+    @apply inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition focus:outline-none focus:ring-2 focus:ring-purple-300;
+  }
+  .btn-primary {
+    @apply inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition
+           bg-purple-600 text-white hover:bg-purple-700 shadow-md shadow-purple-200;
+  }
+  .btn-secondary {
+    @apply inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition
+           border border-gray-200 bg-white hover:bg-gray-50;
+  }
+  .btn-ghost {
+    @apply inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition
+           border border-purple-600 text-purple-700 bg-white hover:bg-purple-50;
+  }
+
+  /* Tarjetas */
+  .card { @apply rounded-xl border border-gray-200 bg-white p-4 shadow-sm; }
+  .card-hover { @apply transition hover:shadow-md; }
+
+  /* Glass y KPI (sin reusar clases en @apply) */
+  .glass {
+    @apply rounded-xl border border-white/15 bg-white/10 backdrop-blur;
+  }
+  .kpi {
+    @apply rounded-xl border border-white/15 bg-white/10 backdrop-blur px-5 py-4;
+  }
+
+  /* Chips de estado */
+  .chip-ok {
+    @apply rounded-full border px-2 py-1 text-xs bg-green-50 text-green-700 border-green-200;
+  }
+  .chip-bad {
+    @apply rounded-full border px-2 py-1 text-xs bg-red-50 text-red-700 border-red-200;
+  }
+
+  /* Inputs */
+  .field {
+    @apply w-72 rounded-lg border border-gray-200 bg-white pl-8 pr-3 py-2 text-sm outline-none ring-0 focus:border-purple-400 focus:ring-2 focus:ring-purple-200;
+  }
+}
+
+/* Fondos decorativos */
+.bg-hero-gradient {
+  background-image:
+    radial-gradient(1200px 600px at -10% -20%, rgba(168,85,247,.25), transparent 60%),
+    radial-gradient(1000px 800px at 120% -10%, rgba(99,102,241,.25), transparent 60%),
+    linear-gradient(135deg, #7c3aed, #6d28d9 60%, #7c3aed);
+}
+.bg-dots {
+  background-size: 24px 24px;
+  background-image:
+    radial-gradient(rgba(255,255,255,0.08) 1px, transparent 1px),
+    radial-gradient(rgba(0,0,0,0.06) 1px, transparent 1px);
+  background-position: 0 0, 12px 12px;
+}
